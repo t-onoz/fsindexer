@@ -1,6 +1,6 @@
 [project]
 name = "fsindexer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -8,7 +8,8 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fsspec>=2026.6.0",
+    # >=2024.9.0: ZipFileSystem.find() is substantially faster for large ZIP archives.
+    "fsspec>=2024.9.0",
 ]
 
 [project.scripts]
@@ -60,4 +61,5 @@ dev = [
     "ipykernel>=7.3.0",
     "pip>=26.1.2",
     "polars>=1.43.0",
+    "rich>=15.0.0",
 ]
