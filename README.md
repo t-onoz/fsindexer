@@ -68,7 +68,6 @@ with FileIndexer(
 - `indexer.scan(depth=None, full=False)`
 - `indexer.full_scan(depth=None)`
 - `indexer.iter_marked()`
-- `enable_debug_log()` and `disable_debug_log()`
 
 ## Notes
 
