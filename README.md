@@ -12,13 +12,7 @@
 
 ## Installation
 
-Install with `pip`:
-
-```bash
-pip install fsindexer
-```
-
-You may also install the package from source:
+Clone the repository and install with `pip`:
 
 ```bash
 pip install .
