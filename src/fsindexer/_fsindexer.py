@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,21 @@ FINGERPRINT_VERSION = b"fsindexer-v2"
 MAX_WORKERS = 8
 
 
-class FileIndexer:
+@dataclass(frozen=True, slots=True)
+class MarkedNode:
+    id: int
+    parent_id: int | None
+    archive_id: int | None
+    name: str
+    node_type: int
+    size: int | None
+    mtime_ms: int | None
+    marker: str | None
+    fingerprint: str | None
+    fs_path: str
+
+
+class FileSystemIndexer:
     def __init__(
         self,
         *,
@@ -51,6 +65,10 @@ class FileIndexer:
             else root_dir_pattern
         )
 
+    # -----------------------------------------------------
+    #   Public API
+    # -----------------------------------------------------
+
     def scan(self, *, full: bool = False) -> None:
         with (
             IndexDatabase(self.database, full_scan=full) as db,
@@ -70,9 +88,13 @@ class FileIndexer:
     def full_scan(self) -> None:
         self.scan(full=True)
 
-    def iter_marked(self) -> Iterator[dict[str, Any]]:
-        with IndexDatabase(self.database, record_scan=False) as db:
-            yield from (dict(row) for row in db.iter_marked())
+    def iter_marked(self) -> Iterator[MarkedNode]:
+        with IndexDatabase(self.database, read_only=True) as db:
+            yield from (MarkedNode(**row) for row in db.iter_marked())
+
+    # -----------------------------------------------------
+    #   Internals
+    # -----------------------------------------------------
 
     def _scan_directory(
         self,
@@ -109,7 +131,7 @@ class FileIndexer:
             fingerprint=fingerprint,
         )
 
-        child_names = {self._name(child["name"]) for child in info_children}
+        child_names = {self._name(str(child["name"])) for child in info_children}
         db.remove_non_existent_children(parent_id, child_names)
 
         pending = []
@@ -246,7 +268,7 @@ class FileIndexer:
 
     @staticmethod
     def _is_zip(info: Info) -> bool:
-        return FileIndexer._node_type(info) == NodeType.FILE and str(
+        return FileSystemIndexer._node_type(info) == NodeType.FILE and str(
             info["name"]
         ).lower().endswith(".zip")
 
@@ -289,71 +311,3 @@ class FileIndexer:
     @staticmethod
     def _name(path: str) -> str:
         return path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
-
-
-def marker_example(
-    info: Info,
-    children: Sequence[Info],
-    fs: AbstractFileSystem,
-) -> str | None:
-    names = {os.path.basename(str(c["name"])).lower() for c in children}
-
-    if "data.csv" in names and "metadata.json" in names:
-        return "data folder"
-
-    if FileIndexer._node_type(info) == NodeType.FILE and str(info["name"]).endswith(
-        ".raw"
-    ):
-        return "raw file"
-
-    return None
-
-
-if __name__ == "__main__":
-    import logging
-    import time
-    from pathlib import Path
-
-    import polars as pl
-    import rich
-
-    logging.basicConfig()
-    logger.setLevel(logging.DEBUG)
-
-    home = Path.home()
-    root = home / "Downloads"
-
-    sqlite_path = home / "Downloads_index.sqlite"
-    csv_path = home / "Downloads_index.csv"
-    if sqlite_path.exists():
-        sqlite_path.unlink()
-
-    def jpg_marker(
-        info: Info,
-        children: Sequence[Info],
-        fs: AbstractFileSystem,
-    ) -> str | None:
-        if info.get("type") == "file" and str(info["name"]).lower().endswith(
-            (".jpg", ".jpeg")
-        ):
-            return "jpg"
-        return None
-
-    indexer = FileIndexer(
-        root=str(root),
-        database=sqlite_path,
-        marker_func=jpg_marker,
-        always_scan_depth=1,
-    )
-    t = time.perf_counter()
-    indexer.scan()
-    print(f"1st scan: {time.perf_counter() - t:.3f} seconds")
-
-    t = time.perf_counter()
-    indexer.scan()
-    print(f"2nd scan: {time.perf_counter() - t:.3f} seconds")
-
-    print("----- marked files -----")
-    df = pl.DataFrame(indexer.iter_marked(), infer_schema_length=None)
-    rich.print(df)
-    df.write_csv(csv_path, include_bom=True)

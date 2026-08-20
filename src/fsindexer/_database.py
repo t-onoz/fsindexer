@@ -21,32 +21,48 @@ class NodeType(IntEnum):
 
 
 class IndexDatabase:
-    def __init__(self, path: str | Path, *, full_scan=False, record_scan=True):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        full_scan: bool = False,
+        read_only: bool = False,
+    ):
         self.path = Path(path)
         self.full_scan = full_scan
-        self.record_scan = record_scan
+        self.read_only = read_only
         self.con: sqlite3.Connection | None = None
         self.scan_id: int | None = None
 
     def __enter__(self):
-        self.con = sqlite3.connect(self.path)
+        if self.read_only:
+            uri = self.path.resolve().as_uri() + "?mode=ro"
+            self.con = sqlite3.connect(uri, uri=True)
+        else:
+            self.con = sqlite3.connect(self.path)
+
         self.con.row_factory = sqlite3.Row
-        self.con.execute("PRAGMA journal_mode = WAL")
-        self.con.execute("PRAGMA synchronous = NORMAL")
-        self._create_tables()
-        if self.record_scan:
+
+        if not self.read_only:
+            self.con.execute("PRAGMA journal_mode = WAL")
+            self.con.execute("PRAGMA synchronous = NORMAL")
+            self._create_tables()
+
             self.scan_id = self._begin_scan()
+
         return self
 
     def __exit__(self, exc_type, exc, tb):
         con = self._connection
+
         try:
-            if exc_type is None:
-                if self.scan_id is not None:
-                    self._finish_scan()
-                con.commit()
-            else:
-                con.rollback()
+            if not self.read_only:
+                if exc_type is None:
+                    if self.scan_id is not None:
+                        self._finish_scan()
+                    con.commit()
+                else:
+                    con.rollback()
         finally:
             con.close()
             self.con = None
