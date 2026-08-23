@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import logging
 import re
@@ -15,6 +16,12 @@ from zipfile import BadZipFile
 import fsspec
 from fsspec import AbstractFileSystem
 from fsspec.implementations.zip import ZipFileSystem
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from ._database import IndexDatabase, NodeType
 
@@ -24,6 +31,38 @@ Info = Mapping[str, Any]
 MarkerFunc = Callable[[Info, Sequence[Info], AbstractFileSystem], str | None]
 FINGERPRINT_VERSION = b"fsindexer-v2"
 MAX_WORKERS = 8
+_NETWORK_WINERRORS = {
+    53,  # ERROR_BAD_NETPATH
+    59,  # ERROR_UNEXP_NET_ERR
+    64,  # ERROR_NETNAME_DELETED
+    121,  # ERROR_SEM_TIMEOUT
+    1231,  # ERROR_NETWORK_UNREACHABLE
+    1232,  # ERROR_HOST_UNREACHABLE
+}
+
+_NETWORK_ERRNOS = {
+    errno.ECONNRESET,
+    errno.ECONNABORTED,
+    errno.ENETDOWN,
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    errno.ETIMEDOUT,
+}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and (
+        exc.errno in _NETWORK_ERRNOS
+        or getattr(exc, "winerror", None) in _NETWORK_WINERRORS
+    )
+
+
+_network_retry = retry(
+    retry=retry_if_exception(_is_retryable),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=1, max=5),
+    reraise=True,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,11 +233,7 @@ class FileSystemIndexer:
         info: Info,
     ) -> None:
         try:
-            with (
-                self.fs.open(str(info["name"]), "rb") as archive_file,
-                closing(ZipFileSystem(fo=archive_file, mode="r")) as zip_fs,
-            ):
-                descendants = self._read_zip_tree(zip_fs)
+            descendants = self._read_zip_tree(str(info["name"]))
         except BadZipFile:
             logger.warning("invalid zip archive: %s", info["name"])
             descendants = []
@@ -209,36 +244,44 @@ class FileSystemIndexer:
             archive_id=zip_id,
         )
 
-    def _read_zip_tree(self, zip_fs: AbstractFileSystem):
-        entries: dict = zip_fs.find("", withdirs=True, detail=True)  # type: ignore
+    @_network_retry
+    def _read_zip_tree(self, path: str):
+        with (
+            self.fs.open(path, "rb") as archive_file,
+            closing(ZipFileSystem(fo=archive_file, mode="r")) as zip_fs,
+        ):
+            entries: dict = zip_fs.find("", withdirs=True, detail=True)  # type: ignore
 
-        children_by_parent = {}
-        for path, info in entries.items():
-            parent = path.rsplit("/", 1)[0] if "/" in path else ""
-            children_by_parent.setdefault(parent, []).append(info)
+            children_by_parent = {}
+            for path, info in entries.items():
+                parent = path.rsplit("/", 1)[0] if "/" in path else ""
+                children_by_parent.setdefault(parent, []).append(info)
 
-        nodes = []
+            nodes = []
+            for path, info in entries.items():
+                parent_path = path.rsplit("/", 1)[0] if "/" in path else ""
 
-        for path, info in entries.items():
-            parent_path = path.rsplit("/", 1)[0] if "/" in path else ""
-
-            children = (
-                children_by_parent.get(path, ()) if info["type"] == "directory" else ()
-            )
-
-            nodes.append(
-                (
-                    path,  # temporary_id
-                    parent_path or None,  # None = ZIP root
-                    info,
-                    self._marker(info, children, zip_fs),
+                children = (
+                    children_by_parent.get(path, ())
+                    if info["type"] == "directory"
+                    else ()
                 )
-            )
 
-        return nodes
+                nodes.append(
+                    (
+                        path,  # temporary_id
+                        parent_path or None,  # None = ZIP root
+                        info,
+                        self._marker(info, children, zip_fs),
+                    )
+                )
 
+            return nodes
+
+    @_network_retry
     def _ls(self, path: str) -> tuple[Info, ...]:
         logger.debug("ls: %s", path)
+
         try:
             return tuple(self.fs.ls(path, detail=True))
         except (FileNotFoundError, NotADirectoryError):

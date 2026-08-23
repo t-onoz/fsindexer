@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     # >=2024.9.0: ZipFileSystem.find() is substantially faster for large ZIP archives.
     "fsspec>=2024.9.0",
+    "tenacity>=9.0.0",
 ]
 
 [project.scripts]
