@@ -57,12 +57,16 @@ class MarkedNode:
     parent_id: int | None
     archive_id: int | None
     name: str
-    node_type: int
+    node_type: NodeType
     size: int | None
     mtime_ms: int | None
     marker: str | None
     fingerprint: str | None
     fs_path: str
+
+    def __post_init__(self):
+        if not isinstance(self.node_type, NodeType):
+            object.__setattr__(self, "node_type", NodeType(self.node_type))
 
 
 class FileSystemIndexer:

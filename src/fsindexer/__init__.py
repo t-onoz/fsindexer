@@ -1,9 +1,8 @@
 import logging
 from typing import IO
 
+from ._database import NodeType
 from ._fsindexer import FileSystemIndexer, Info, MarkedNode
-
-__all__ = ["FileSystemIndexer", "Info", "MarkedNode", "set_logging"]
 
 _handler: logging.Handler | None = None
 
@@ -31,3 +30,6 @@ def set_logging(
     _handler = logging.StreamHandler(stream)
     _handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
     logger.addHandler(_handler)
+
+
+__all__ = ["FileSystemIndexer", "Info", "MarkedNode", "set_logging", "NodeType"]
