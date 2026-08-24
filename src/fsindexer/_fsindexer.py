@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import hashlib
 import logging
 import re
@@ -17,13 +16,14 @@ import fsspec
 from fsspec import AbstractFileSystem
 from fsspec.implementations.zip import ZipFileSystem
 from tenacity import (
+    before_sleep_log,
     retry,
-    retry_if_exception,
+    retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
+    wait_exponential_jitter,
 )
 
-from ._database import IndexDatabase, NodeType
+from ._database import Descendant, IndexDatabase, NodeType
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ Info = Mapping[str, Any]
 MarkerFunc = Callable[[Info, Sequence[Info], AbstractFileSystem], str | None]
 FINGERPRINT_VERSION = b"fsindexer-v2"
 MAX_WORKERS = 8
+
 _NETWORK_WINERRORS = {
     53,  # ERROR_BAD_NETPATH
     59,  # ERROR_UNEXP_NET_ERR
@@ -40,27 +41,12 @@ _NETWORK_WINERRORS = {
     1232,  # ERROR_HOST_UNREACHABLE
 }
 
-_NETWORK_ERRNOS = {
-    errno.ECONNRESET,
-    errno.ECONNABORTED,
-    errno.ENETDOWN,
-    errno.ENETUNREACH,
-    errno.EHOSTUNREACH,
-    errno.ETIMEDOUT,
-}
 
-
-def _is_retryable(exc: BaseException) -> bool:
-    return isinstance(exc, OSError) and (
-        exc.errno in _NETWORK_ERRNOS
-        or getattr(exc, "winerror", None) in _NETWORK_WINERRORS
-    )
-
-
-_network_retry = retry(
-    retry=retry_if_exception(_is_retryable),
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=1, min=1, max=5),
+_io_retry = retry(
+    retry=retry_if_exception_type(OSError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential_jitter(initial=1, max=5),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
 
@@ -244,32 +230,39 @@ class FileSystemIndexer:
             archive_id=zip_id,
         )
 
-    @_network_retry
-    def _read_zip_tree(self, path: str):
+    @_io_retry
+    def _read_zip_tree(self, path: str) -> list[Descendant]:
+        try:
+            archive_file = self.fs.open(path, "rb")
+        except FileNotFoundError as exc:
+            if getattr(exc, "winerror", None) in _NETWORK_WINERRORS:
+                raise
+            return []
+
         with (
-            self.fs.open(path, "rb") as archive_file,
+            archive_file,
             closing(ZipFileSystem(fo=archive_file, mode="r")) as zip_fs,
         ):
             entries: dict = zip_fs.find("", withdirs=True, detail=True)  # type: ignore
 
             children_by_parent = {}
-            for path, info in entries.items():
-                parent = path.rsplit("/", 1)[0] if "/" in path else ""
+            for inner_path, info in entries.items():
+                parent = inner_path.rsplit("/", 1)[0] if "/" in inner_path else ""
                 children_by_parent.setdefault(parent, []).append(info)
 
             nodes = []
-            for path, info in entries.items():
-                parent_path = path.rsplit("/", 1)[0] if "/" in path else ""
+            for inner_path, info in entries.items():
+                parent_path = inner_path.rsplit("/", 1)[0] if "/" in inner_path else ""
 
                 children = (
-                    children_by_parent.get(path, ())
+                    children_by_parent.get(inner_path, ())
                     if info["type"] == "directory"
                     else ()
                 )
 
                 nodes.append(
                     (
-                        path,  # temporary_id
+                        inner_path,  # temporary_id
                         parent_path or None,  # None = ZIP root
                         info,
                         self._marker(info, children, zip_fs),
@@ -278,13 +271,18 @@ class FileSystemIndexer:
 
             return nodes
 
-    @_network_retry
+    @_io_retry
     def _ls(self, path: str) -> tuple[Info, ...]:
         logger.debug("ls: %s", path)
 
         try:
             return tuple(self.fs.ls(path, detail=True))
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError as exc:
+            # Windowsのネットワークパス障害はretryさせる
+            if getattr(exc, "winerror", None) in _NETWORK_WINERRORS:
+                raise
+            return ()
+        except NotADirectoryError:
             return ()
         except PermissionError:
             logger.warning("Permission denied: %s", path)
