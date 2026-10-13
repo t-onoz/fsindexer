@@ -1,6 +1,6 @@
 [project]
 name = "fsindexer"
-version = "0.2.2"
+dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -17,8 +17,14 @@ dependencies = [
 fsindexer = "fsindexer:main"
 
 [build-system]
-requires = ["uv_build>=0.11.30,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.27,<2", "hatch-vcs>=0.5,<1"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fsindexer"]
 
 
 [tool.ruff]
@@ -50,6 +56,9 @@ members = [
 
 [tool.uv.sources]
 fsindexer = { workspace = true, editable = true }
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [tool.mypy]
 python_version = "3.13"
