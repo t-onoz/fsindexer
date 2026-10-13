@@ -7,11 +7,12 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
-Info = Mapping[str, Any]
+FileInfo = Mapping[str, Any]
+"""File information returned by fsspec info()/ls(detail=True)."""
 
 # (temporary_id, temporary_parent_id, info, marker)
 # temporary_parent_id=None means the replacement subtree root.
-Descendant = tuple[str, str | None, Info, str | None]
+Descendant = tuple[str, str | None, FileInfo, str | None]
 
 
 class NodeType(IntEnum):
@@ -107,7 +108,7 @@ class IndexDatabase:
         self,
         *,
         parent_id: int | None,
-        info: Info,
+        info: FileInfo,
         marker: str | None,
         fingerprint: str | None,
         archive_id: int | None = None,
@@ -495,7 +496,7 @@ class IndexDatabase:
         )
 
     @staticmethod
-    def _node_type(info: Info) -> int:
+    def _node_type(info: FileInfo) -> int:
         value = info.get("type")
         if value in {"directory", "dir", "folder"}:
             return NodeType.DIRECTORY
@@ -504,7 +505,7 @@ class IndexDatabase:
         return NodeType.OTHER
 
     @staticmethod
-    def _mtime_ms(info: Info) -> int | None:
+    def _mtime_ms(info: FileInfo) -> int | None:
         value = (
             info.get("mtime")
             or info.get("LastModified")

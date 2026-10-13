@@ -2,7 +2,7 @@ import logging
 from typing import IO
 
 from ._database import NodeType
-from ._fsindexer import FileSystemIndexer, Info, MarkedNode
+from ._fsindexer import FileInfo, FileSystemIndexer, MarkedNode
 
 _handler: logging.Handler | None = None
 
@@ -32,4 +32,4 @@ def set_logging(
     logger.addHandler(_handler)
 
 
-__all__ = ["FileSystemIndexer", "Info", "MarkedNode", "set_logging", "NodeType"]
+__all__ = ["FileSystemIndexer", "FileInfo", "MarkedNode", "set_logging", "NodeType"]

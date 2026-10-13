@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from zipfile import BadZipFile
 
 import fsspec
@@ -23,12 +22,11 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from ._database import Descendant, IndexDatabase, NodeType
+from ._database import Descendant, FileInfo, IndexDatabase, NodeType
 
 logger = logging.getLogger(__name__)
 
-Info = Mapping[str, Any]
-MarkerFunc = Callable[[Info, Sequence[Info], AbstractFileSystem], str | None]
+MarkerFunc = Callable[[FileInfo, Sequence[FileInfo], AbstractFileSystem], str | None]
 FINGERPRINT_VERSION = b"fsindexer-v2"
 MAX_WORKERS = 8
 
@@ -131,11 +129,11 @@ class FileSystemIndexer:
         executor: ThreadPoolExecutor,
         *,
         path: str,
-        info: Info,
+        info: FileInfo,
         parent_id: int | None,
         depth: int,
         is_root: bool = False,
-        info_children: Sequence[Info] | None = None,
+        info_children: Sequence[FileInfo] | None = None,
     ) -> None:
         if info_children is None:
             info_children = self._ls(path)
@@ -220,7 +218,7 @@ class FileSystemIndexer:
         db: IndexDatabase,
         *,
         zip_id: int,
-        info: Info,
+        info: FileInfo,
     ) -> None:
         try:
             descendants = self._read_zip_tree(str(info["name"]))
@@ -276,7 +274,7 @@ class FileSystemIndexer:
             return nodes
 
     @_io_retry
-    def _ls(self, path: str) -> tuple[Info, ...]:
+    def _ls(self, path: str) -> tuple[FileInfo, ...]:
         logger.debug("ls: %s", path)
 
         try:
@@ -294,8 +292,8 @@ class FileSystemIndexer:
 
     def _marker(
         self,
-        info: Info,
-        children: Sequence[Info],
+        info: FileInfo,
+        children: Sequence[FileInfo],
         fs: AbstractFileSystem,
     ) -> str | None:
         if self.marker_func is None:
@@ -303,7 +301,7 @@ class FileSystemIndexer:
         return self.marker_func(info, children, fs)
 
     @staticmethod
-    def _node_type(info: Info) -> NodeType:
+    def _node_type(info: FileInfo) -> NodeType:
         value = info.get("type")
         if value in {"directory", "dir", "folder"}:
             return NodeType.DIRECTORY
@@ -312,13 +310,13 @@ class FileSystemIndexer:
         return NodeType.OTHER
 
     @staticmethod
-    def _is_zip(info: Info) -> bool:
+    def _is_zip(info: FileInfo) -> bool:
         return FileSystemIndexer._node_type(info) == NodeType.FILE and str(
             info["name"]
         ).lower().endswith(".zip")
 
     @staticmethod
-    def _mtime_ms_text(info: Info) -> str:
+    def _mtime_ms_text(info: FileInfo) -> str:
         value = (
             info.get("mtime")
             or info.get("LastModified")
@@ -335,7 +333,7 @@ class FileSystemIndexer:
         return "unknown"
 
     @classmethod
-    def _fingerprint(cls, info: Info) -> str:
+    def _fingerprint(cls, info: FileInfo) -> str:
         digest = hashlib.blake2b(digest_size=8)
         for value in (
             FINGERPRINT_VERSION,

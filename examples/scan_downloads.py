@@ -6,7 +6,7 @@ import polars as pl
 import rich
 from fsspec import AbstractFileSystem
 
-from fsindexer import FileSystemIndexer, Info, set_logging
+from fsindexer import FileInfo, FileSystemIndexer, set_logging
 
 set_logging(True)
 
@@ -21,8 +21,8 @@ if sqlite_path.exists():
 
 # example marker
 def jpg_marker(
-    info: Info,
-    children: Sequence[Info],
+    info: FileInfo,
+    children: Sequence[FileInfo],
     fs: AbstractFileSystem,
 ) -> str | None:
     if info.get("type") == "file" and str(info["name"]).lower().endswith(
